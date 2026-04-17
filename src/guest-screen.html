@@ -456,18 +456,46 @@
 
     <script>
       /**
-       * 简易缓存管理器
+       * 简易缓存管理器（使用 IndexedDB 存储图片）
        */
       const CacheManager = {
-        CACHE_NAME: "guest-screen-qr-cache",
+        DB_NAME: "guest-screen-db",
+        DB_VERSION: 1,
+        STORE_NAME: "images",
         SETTINGS_KEY: "guest-screen-settings",
+        db: null,
+
+        async initDB() {
+          if (this.db) return this.db;
+          return new Promise((resolve, reject) => {
+            const request = indexedDB.open(this.DB_NAME, this.DB_VERSION);
+            request.onerror = () => reject(request.error);
+            request.onsuccess = () => {
+              this.db = request.result;
+              resolve(this.db);
+            };
+            request.onupgradeneeded = (event) => {
+              const db = event.target.result;
+              if (!db.objectStoreNames.contains(this.STORE_NAME)) {
+                db.createObjectStore(this.STORE_NAME, { keyPath: "key" });
+              }
+            };
+          });
+        },
 
         async storeImage(key, file) {
           try {
-            const cache = await caches.open(this.CACHE_NAME);
-            const response = new Response(file);
-            await cache.put(key, response);
-            console.log(`Image ${key} stored in cache.`);
+            await this.initDB();
+            return new Promise((resolve, reject) => {
+              const transaction = this.db.transaction([this.STORE_NAME], "readwrite");
+              const store = transaction.objectStore(this.STORE_NAME);
+              const request = store.put({ key, blob: file });
+              request.onsuccess = () => {
+                console.log(`Image ${key} stored in IndexedDB.`);
+                resolve();
+              };
+              request.onerror = () => reject(request.error);
+            });
           } catch (error) {
             console.error(`Failed to store image ${key}:`, error);
           }
@@ -475,24 +503,35 @@
 
         async getImage(key) {
           try {
-            const cache = await caches.open(this.CACHE_NAME);
-            const response = await cache.match(key);
-            if (response) {
-              return response.blob();
-            }
-            return null;
+            await this.initDB();
+            return new Promise((resolve, reject) => {
+              const transaction = this.db.transaction([this.STORE_NAME], "readonly");
+              const store = transaction.objectStore(this.STORE_NAME);
+              const request = store.get(key);
+              request.onsuccess = () => {
+                resolve(request.result ? request.result.blob : null);
+              };
+              request.onerror = () => reject(request.error);
+            });
           } catch (error) {
             console.error(`Failed to get image ${key}:`, error);
             return null;
           }
         },
 
-        // 新增: 删除图片缓存
         async deleteImage(key) {
           try {
-            const cache = await caches.open(this.CACHE_NAME);
-            await cache.delete(key);
-            console.log(`Image ${key} deleted from cache.`);
+            await this.initDB();
+            return new Promise((resolve, reject) => {
+              const transaction = this.db.transaction([this.STORE_NAME], "readwrite");
+              const store = transaction.objectStore(this.STORE_NAME);
+              const request = store.delete(key);
+              request.onsuccess = () => {
+                console.log(`Image ${key} deleted from IndexedDB.`);
+                resolve();
+              };
+              request.onerror = () => reject(request.error);
+            });
           } catch (error) {
             console.error(`Failed to delete image ${key}:`, error);
           }
